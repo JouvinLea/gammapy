@@ -47,7 +47,7 @@ class SingleObsCubeMaker(object):
     """
 
     def __init__(self, obs, empty_cube_images, empty_exposure_cube,
-                 offset_band, exclusion_mask=None, save_bkg_scale=True):
+                 offset_band, header, exclusion_mask=None, save_bkg_scale=True):
         # Select the events in the given energy and offset range
         self.energy_reco_bins = empty_cube_images.energy_axis.energy
         self.offset_band = offset_band
@@ -64,11 +64,10 @@ class SingleObsCubeMaker(object):
 
         # self.images = SkyImageList()
         # self.empty_image = empty_image
-        self.header = self.empty_cube.wcs.to_header()
+        self.header = header
         if exclusion_mask:
-            self.cube_exclusion_mask = np.tile(exclusion_mask,
-                                               (len(energy_bins) - 1, 1, 1))
-
+            self.cube_exclusion_mask = np.tile(exclusion_mask.data,
+                                               (len(self.energy_reco_bins) - 1, 1, 1))
         self.aeff = obs.aeff
         self.edisp = obs.edisp
         self.psf = obs.psf
@@ -79,11 +78,11 @@ class SingleObsCubeMaker(object):
         if self.save_bkg_scale:
             self.table_bkg_scale = Table(names=["OBS_ID", "bkg_scale"])
 
-    def counts_cube(self):
+    def make_counts_cube(self):
         """Fill the counts image for the events of one observation."""
         self.counts_cube.fill_events(self.events)
 
-    def bkg_cube(self, bkg_norm=True):
+    def make_bkg_cube(self, bkg_norm=True):
         """
         Make the background image for one observation from a bkg model.
 
@@ -93,10 +92,10 @@ class SingleObsCubeMaker(object):
             If true, apply the scaling factor from the number of counts
             outside the exclusion region to the bkg image
         """
-        for i_E in len(self.energy_reco_bins):
+        for i_E in range(len(self.energy_reco_bins)-1):
             energy_band = Energy(
-                [energy_bins[i_E].value, energy_bins[i_E + 1].value],
-                energy_bins.unit)
+                [self.energy_reco_bins[i_E].value, self.energy_reco_bins[i_E + 1].value],
+                self.energy_reco_bins.unit)
             table = self.bkg.acceptance_curve_in_energy_band(
                 energy_band=energy_band)
             center = self.obs_center.galactic
@@ -105,10 +104,8 @@ class SingleObsCubeMaker(object):
                                             table["Acceptance"],
                                             self.offset_band[1])
             bkg_image = Quantity(bkg_hdu.data, table[
-                "Acceptance"].unit) * bkg_image.solid_angle() * self.livetime
-            self.bkg_cube.data[i_E, :, :] = bkg_image.decompose()
-            self.bkg_cube.data[i_E, :, :] = self.counts_cube.data[i_E, :,
-                                            :].value
+                "Acceptance"].unit) * self.bkg_cube.sky_image_ref.solid_angle() * self.livetime
+            self.bkg_cube.data[i_E, :, :] = bkg_image.decompose().value
 
         if bkg_norm:
             scale = self.background_norm_factor(self.counts_cube,
@@ -135,8 +132,8 @@ class SingleObsCubeMaker(object):
             scaling factor between the counts and the bkg images outside the exclusion region.
         """
         counts_sum = np.sum(
-            self.counts_cube.data * self.cube_exclusion_mask.data)
-        bkg_sum = np.sum(self.bkg_cube.data * self.cube_exclusion_mask.data)
+            self.counts_cube.data * self.cube_exclusion_mask)
+        bkg_sum = np.sum(self.bkg_cube.data * self.cube_exclusion_mask)
         scale = counts_sum / bkg_sum
 
         return scale
@@ -151,7 +148,7 @@ class SingleObsCubeMaker(object):
                                            ref_cube=self.exposure_cube,
                                            offset_max=self.offset_band[1])
 
-    def significance_cube(self, radius):
+    def make_significance_cube(self, radius):
         """Make the significance image from the counts and bkg images.
 
         Parameters
@@ -159,14 +156,14 @@ class SingleObsCubeMaker(object):
         radius : float
             Disk radius in pixels.
         """
-        for i_E in len(self.energy_reco_bins):
+        for i_E in range(len(self.energy_reco_bins)-1):
             counts = disk_correlate(self.counts_cube[i_E, :, :], radius)
             bkg = disk_correlate(self.bkg_cube[i_E, :, :], radius)
             self.significance_cube.data[i_E, :, :] = significance(counts, bkg)
 
-    def excess_cube(self):
+    def make_excess_cube(self):
         """Compute excess between counts and bkg image."""
-        for i_E in len(self.energy_reco_bins):
+        for i_E in range(len(self.energy_reco_bins)-1):
             self.excess_cube.data[i_E, :, :] = self.counts_cube[i_E, :,
                                                :] - self.bkg_cube[i_E, :, :]
 
@@ -202,7 +199,7 @@ class StackedObsCubeMaker(object):
          "OBS_ID" and "bkg_scale"
     """
 
-    def __init__(self, empty_cube_images, empty_exposure_cube=None,
+    def __init__(self, empty_cube_images, header,empty_exposure_cube=None,
                  offset_band=None,
                  data_store=None, obs_table=None, exclusion_mask=None,
                  ncounts_min=0, save_bkg_scale=True):
@@ -224,7 +221,7 @@ class StackedObsCubeMaker(object):
         self.obs_table = obs_table
         self.offset_band = offset_band
 
-        self.header = self.empty_cube.wcs.to_header()
+        self.header = header
         self.exclusion_mask = exclusion_mask
         if exclusion_mask:
             self.exclusion_mask = exclusion_mask
@@ -252,29 +249,28 @@ class StackedObsCubeMaker(object):
 
         for obs_id in self.obs_table['OBS_ID']:
             obs = self.data_store.obs(obs_id)
-            cube_images = SingleObsCubeMaker(obs,
+            cube_images = SingleObsCubeMaker(obs=obs,
                                              empty_cube_images=self.empty_cube_images,
                                              empty_exposure_cube=self.empty_exposure_cube,
+                                             header=self.header,
                                              offset_band=self.offset_band,
                                              exclusion_mask=self.exclusion_mask,
                                              save_bkg_scale=self.save_bkg_scale)
-
-            cube_images.counts_cube()
+            cube_images.make_counts_cube()
             self.counts_cube.data += cube_images.counts_cube.data
             if make_background_image:
-                cube_images.bkg_cube(bkg_norm)
+                cube_images.make_bkg_cube(bkg_norm)
                 if self.save_bkg_scale:
                     self.table_bkg_scale.add_row(
                         cube_images.table_bkg_scale[0])
                 cube_images.make_exposure_cube()
                 self.bkg_cube.data += cube_images.bkg_cube.data
-                self.exposure_cube.data += cube_images.exposure_cube.data
-
+                self.exposure_cube.data += cube_images.exposure_cube.data.to("m2 s")
         if make_background_image:
-            self.significance_cube(radius)
-            self.excess_cube()
+            self.make_significance_cube(radius)
+            self.make_excess_cube()
 
-    def significance_image(self, radius):
+    def make_significance_cube(self, radius):
         """Make the significance image from the counts and bkg images.
 
         Parameters
@@ -282,13 +278,13 @@ class StackedObsCubeMaker(object):
         radius : float
             Disk radius in pixels.
         """
-        for i_E in len(self.energy_reco_bins):
-            counts = disk_correlate(self.counts_cube[i_E, :, :], radius)
-            bkg = disk_correlate(self.bkg_cube[i_E, :, :], radius)
+        for i_E in range(len(self.energy_reco_bins)-1):
+            counts = disk_correlate(self.counts_cube.data[i_E, :, :], radius)
+            bkg = disk_correlate(self.bkg_cube.data[i_E, :, :], radius)
             self.significance_cube.data[i_E, :, :] = significance(counts, bkg)
 
-    def excess_image(self):
+    def make_excess_cube(self):
         """Compute excess between counts and bkg image."""
-        for i_E in len(self.energy_reco_bins):
-            self.excess_cube.data[i_E, :, :] = self.counts_cube[i_E, :,
-                                               :] - self.bkg_cube[i_E, :, :]
+        for i_E in range(len(self.energy_reco_bins)-1):
+            self.excess_cube.data[i_E, :, :] = self.counts_cube.data[i_E, :,
+                                               :] - self.bkg_cube.data[i_E, :, :]
