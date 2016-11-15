@@ -5,10 +5,11 @@ import numpy as np
 from astropy.units import Quantity
 from astropy.table import QTable, Table
 from astropy.coordinates import Angle
-from ..utils.energy import EnergyBounds
+from ..utils.energy import EnergyBounds, Energy
 from ..stats import significance
 from ..background import fill_acceptance_image
 from ..image import SkyImage, SkyImageList, disk_correlate
+from ..cube import SkyCube
 
 __all__ = ['SingleObsCubeMaker', 'StackedObsCubeMaker']
 
@@ -16,7 +17,7 @@ log = logging.getLogger(__name__)
 
 
 class SingleObsCubeMaker(object):
-    """Compute images for one observation.
+    """Compute '~gammapy.cube.SkyCube' images for one observation.
 
     The computed images are stored in a ``images`` attribute of
     type `~gammapy.image.SkyImageList` with the following keys:
@@ -31,38 +32,37 @@ class SingleObsCubeMaker(object):
     ----------
     obs : `~gammapy.data.DataStoreObservation`
         Observation data
-    empty_image : `~gammapy.image.SkyImage`
-        Reference image
-    energy_band : `~gammapy.utils.energy.Energy`
-        Energy band selection
+    empty_cube : `~gammapy.cube.SkyCube`
+        Reference Cube
     offset_band : `astropy.coordinates.Angle`
         Offset band selection
     exclusion_mask : `~gammapy.image.SkyMask`
         Exclusion mask
-    ncounts_min : int
-        Minimum counts required for the observation (TODO: used how?)
     save_bkg_scale: bool
         True if you want to save the normalisation of the bkg computed outside the exlusion region in a Table
     """
 
-    def __init__(self, obs, empty_image,
-                 energy_band, offset_band, exclusion_mask=None, ncounts_min=0, save_bkg_scale=True):
+    def __init__(self, obs, empty_cube, offset_band, exclusion_mask=None, save_bkg_scale=True):
         # Select the events in the given energy and offset range
-        self.energy_band = energy_band
+        self.energy_bins = empty_cube.energy_axis.energy
         self.offset_band = offset_band
+        self.counts_cube = SkyCube.empty_like(empty_cube)
+        self.bkg_cube = SkyCube.empty_like(empty_cube)
+        self.exposure_cube = SkyCube.empty_like(empty_cube)
+        self.significance_cube = SkyCube.empty_like(empty_cube)
+        self.excess_cube = SkyCube.empty_like(empty_cube)
+
+        self.obs_id = obs.obs_id
         events = obs.events
-        self.obs_id = events.meta["OBS_ID"]
-        events = events.select_energy(self.energy_band)
+        #events = events.select_energy(self.energy_band)
         self.events = events.select_offset(self.offset_band)
 
-        self.images = SkyImageList()
-        self.empty_image = empty_image
-        self.header = self.empty_image.to_image_hdu().header
+        #self.images = SkyImageList()
+        #self.empty_image = empty_image
+        self.header = self.empty_cube.wcs.to_header()
         if exclusion_mask:
-            exclusion_mask.name = 'exclusion'
-            self.images['exclusion'] = exclusion_mask
+            self.cube_exclusion_mask = np.tile(exclusion_mask, (len(energy_bins)-1, 1, 1))
 
-        self.ncounts_min = ncounts_min
         self.aeff = obs.aeff
         self.edisp = obs.edisp
         self.psf = obs.psf
@@ -75,13 +75,7 @@ class SingleObsCubeMaker(object):
 
     def counts_image(self):
         """Fill the counts image for the events of one observation."""
-        self.images['counts'] = SkyImage.empty_like(self.empty_image, name='counts')
-
-        if len(self.events) > self.ncounts_min:
-            self.images['counts'].fill_events(self.events)
-        else:
-            log.warn('Too few counts, there is only {} events and you requested a minimal counts number of {}'.
-                     format(len(self.events), self.ncounts_min))
+        self.counts_cube.fill_events(self.events)
 
     def bkg_image(self, bkg_norm=True):
         """
@@ -93,20 +87,21 @@ class SingleObsCubeMaker(object):
             If true, apply the scaling factor from the number of counts
             outside the exclusion region to the bkg image
         """
-        bkg_image = SkyImage.empty_like(self.empty_image)
-        table = self.bkg.acceptance_curve_in_energy_band(energy_band=self.energy_band)
-        center = self.obs_center.galactic
-        bkg_hdu = fill_acceptance_image(self.header, center, table["offset"], table["Acceptance"], self.offset_band[1])
-        bkg_image.data = Quantity(bkg_hdu.data, table["Acceptance"].unit) * bkg_image.solid_angle() * self.livetime
-        bkg_image.data = bkg_image.data.decompose()
-        bkg_image.data = bkg_image.data.value
+        for i_E in len(self.energy_bins):
+            energy_band = Energy([energy_bins[i_E].value, energy_bins[i_E + 1].value], energy_bins.unit)
+            table = self.bkg.acceptance_curve_in_energy_band(energy_band=energy_band)
+            center = self.obs_center.galactic
+            bkg_hdu = fill_acceptance_image(self.header, center, table["offset"], table["Acceptance"], self.offset_band[1])
+            bkg_image = Quantity(bkg_hdu.data, table["Acceptance"].unit) * bkg_image.solid_angle() * self.livetime
+            self.bkg_cube.data[i_E,:,:]= bkg_image.decompose()
+            self.bkg_cube.data[i_E,:,:]=self.counts_cube.data[i_E,:,:].value
+
         if bkg_norm:
-            scale = self.background_norm_factor(self.images["counts"], bkg_image)
-            bkg_image.data = scale * bkg_image.data
+            scale = self.background_norm_factor(self.counts_cube, self.bkg_cube)
+            self.bkg_cube.data = scale * self.bkg_cube.data
             if self.save_bkg_scale:
                 self.table_bkg_scale.add_row([self.obs_id, scale])
 
-        self.images["bkg"] = bkg_image
 
     def make_1d_expected_counts(self, spectral_index=2.3, for_integral_flux=False):
         """Compute the 1D exposure table for one observation for an offset table.
@@ -194,18 +189,18 @@ class SingleObsCubeMaker(object):
 
         Parameters
         ----------
-        counts : `~gammapy.image.SkyImage`
-            counts image
-        bkg : `~gammapy.image.SkyImage`
-            bkg image
+        counts : `~gammapy.cube.SkyCube`
+            counts images cube
+        bkg : `~gammapy.cube.SkyCube`
+            bkg images cube
 
         Returns
         -------
         scale : float
             scaling factor between the counts and the bkg images outside the exclusion region.
         """
-        counts_sum = np.sum(counts.data * self.images['exclusion'].data)
-        bkg_sum = np.sum(bkg.data * self.images['exclusion'].data)
+        counts_sum = np.sum(self.counts_cube.data * self.cube_exclusion_mask.data)
+        bkg_sum = np.sum(self.bkg_cube.data * self.cube_exclusion_mask.data)
         scale = counts_sum / bkg_sum
 
         return scale
@@ -218,18 +213,17 @@ class SingleObsCubeMaker(object):
         radius : float
             Disk radius in pixels.
         """
-        image = SkyImage.empty_like(self.empty_image)
-        counts = disk_correlate(self.images["counts"].data, radius)
-        bkg = disk_correlate(self.images["bkg"].data, radius)
-        image.data = significance(counts, bkg)
+        for i_E in len(self.energy_bins):
+            counts = disk_correlate(self.counts_cube[i_E,:,:], radius)
+            bkg = disk_correlate(self.bkg_cube[i_E,:,:], radius)
+            self.significance_cube.data[i_E,:,:] = significance(counts, bkg)
 
-        self.images["significance"] = image
 
     def excess_image(self):
         """Compute excess between counts and bkg image."""
-        total_excess = SkyImage.empty_like(self.empty_image)
-        total_excess.data = self.images["counts"].data - self.images["bkg"].data
-        self.images["excess"] = total_excess
+        for i_E in len(self.energy_bins):
+        self.excess_cube.data[i_E,:,:] =  self.counts_cube[i_E,:,:] - self.bkg_cube[i_E,:,:]
+
 
 
 class StackedObsCubeMaker(object):
