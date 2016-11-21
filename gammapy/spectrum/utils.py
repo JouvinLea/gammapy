@@ -51,8 +51,7 @@ class LogEnergyAxis(object):
         x = np.log10(energy.to(self.energy.unit).value)
 
         # Interpolate in `x`
-        pix = np.interp(x, self.x, self.pix, left=self.pix[0] - 0.5,
-                        right=self.pix[1] + 0.5)
+        pix = np.interp(x, self.x, self.pix)
 
         return np.atleast_1d(pix)
 
