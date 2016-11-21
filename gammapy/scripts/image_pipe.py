@@ -58,7 +58,6 @@ class SingleObsImageMaker(object):
 
         self.images = SkyImageList()
         self.empty_image = empty_image
-        import IPython; IPython.embed()
         self.header = self.empty_image.to_image_hdu().header
         if exclusion_mask:
             exclusion_mask.name = 'exclusion'
