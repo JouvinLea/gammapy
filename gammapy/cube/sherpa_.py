@@ -197,7 +197,6 @@ class CombinedModel3D(ArithmeticModel):
         _spectral = self.spectral_model.calc(pars[self._spectral_pars], elo, ehi)
         return _spatial * _spectral
 
-
 class CombinedModel3DInt(ArithmeticModel):
     """
     Combined spatial and spectral 3D model.
@@ -219,17 +218,19 @@ class CombinedModel3DInt(ArithmeticModel):
     """
 
     def __init__(self, name='cube-model', use_psf=True, exposure=None, psf=None, spatial_model=None,
-                 spectral_model=None, edisp=None):
+                 spectral_model=None, use_edisp=False,edisp=None):
         self.spatial_model = spatial_model
         self.spectral_model = spectral_model
         self.use_psf = use_psf
         self.exposure = exposure
         self.psf = psf
-        self.edisp = edisp
-        self.shape_exposure=self.exposure.data.shape
-        #edisp aura dim(Etrue,Ereco)
-        self.shape_edisp=self.edisp.shape
-        self.newdata=np.zeros((self.shape_exposure[1],self.shape_exposure[2],self.shape_exposure[0],self.shape_edisp[1]))
+        self.use_edisp= use_edisp
+        if use_edisp:
+            self.edisp = edisp
+            self.shape_exposure=self.exposure.data.shape
+            self.shape_edisp=self.edisp.shape
+            self.newdata=np.zeros((self.shape_exposure[1],self.shape_exposure[2],self.shape_exposure[0],self.shape_edisp[1]))
+
 
         # Fix spectral ampl parameter
         spectral_model.ampl = 1
@@ -243,6 +244,24 @@ class CombinedModel3DInt(ArithmeticModel):
         self._spatial_pars = slice(0, len(spatial_model.pars))
         self._spectral_pars = slice(len(spatial_model.pars), len(pars))
         ArithmeticModel.__init__(self, name, pars)
+
+    def calc(self, pars, elo, xlo, ylo, ehi, xhi, yhi):
+        from scipy import signal
+        shape = self.exposure.data.shape
+        result_convol = np.zeros(shape)
+        if self.use_psf:
+            a = (self.exposure * self.spatial_model.calc(pars[self._spatial_pars], xlo, xhi, ylo, yhi).reshape(shape))
+            for ind_E in range(shape[0]):
+                result_convol[ind_E, :, :] = signal.fftconvolve(a[ind_E, :, :], self.psf[ind_E, :, :] /
+                                                                (self.psf[ind_E, :, :].sum()), mode='same')
+            if
+            _spatial = result_convol.ravel()
+        else:
+            _spatial = self.spatial_model.calc(pars[self._spatial_pars], x, y)
+        _spectral = self.spectral_model.calc(pars[self._spectral_pars], elo, ehi)
+        return _spatial * _spectral
+
+
 
     def calc(self, pars, elo, ehi, x, y):
         from scipy import signal
@@ -269,4 +288,4 @@ class CombinedModel3DInt(ArithmeticModel):
             self.newdata[:,:,:,ireco]=np.moveaxis(spatial, 0, -1)*np.moveaxis(spectral, 0, -1)*self.edisp[:,ireco]*etrue_band
         #On somme sur etrue qui est en dim=2 pour l instant
         final_result=np.sum(self.newdata,axis=2)
-        return final_result
+        return final_result.ravel()

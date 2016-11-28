@@ -316,7 +316,7 @@ class SkyCube(object):
         energy = Quantity(energy, self.energy_axis.energy.unit)
         return (position, energy)
 
-    def to_sherpa_data3d(self, dstype='Data3D', use_true_energy=False, energy_true_axis=None):
+    def to_sherpa_data3d(self, dstype='Data3D'):
         """
         Convert sky cube to sherpa `Data3D` or `Data3DInt` object.
 
@@ -326,10 +326,7 @@ class SkyCube(object):
             Sherpa data type.
         """
         from .sherpa_ import Data3D, Data3DInt
-        if use_true_energy:
-            energies = energy_true_axis.energy.to("TeV").value
-        else:
-            energies = self.energies(mode='edges').to("TeV").value
+        energies = self.energies(mode='edges').to("TeV").value
         elo = energies[:-1]
         ehi = energies[1:]
         n_ebins = len(elo)
