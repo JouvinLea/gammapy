@@ -7,9 +7,9 @@ from astropy.units import Quantity
 from astropy.table import QTable, Table
 from astropy.coordinates import Angle
 from ..utils.energy import EnergyBounds, Energy
+from astropy.convolution import Tophat2DKernel
 from ..stats import significance
 from ..background import fill_acceptance_image
-from ..image import SkyImage, SkyImageList, disk_correlate
 from ..cube import SkyCube
 from .exposure import exposure_cube
 
@@ -47,7 +47,7 @@ class SingleObsCubeMaker(object):
     """
 
     def __init__(self, obs, empty_cube_images, empty_exposure_cube,
-                 offset_band, header, exclusion_mask=None, save_bkg_scale=True):
+                 offset_band, exclusion_mask=None, save_bkg_scale=True):
         # Select the events in the given energy and offset range
         self.energy_reco_bins = empty_cube_images.energy_axis.energy
         self.offset_band = offset_band
@@ -64,7 +64,7 @@ class SingleObsCubeMaker(object):
 
         # self.images = SkyImageList()
         # self.empty_image = empty_image
-        self.header = header
+        self.header = empty_cube_images.sky_image_ref.to_image_hdu().header
         if exclusion_mask:
             self.cube_exclusion_mask = np.tile(exclusion_mask.data,
                                                (len(self.energy_reco_bins) - 1, 1, 1))
@@ -156,10 +156,12 @@ class SingleObsCubeMaker(object):
         radius : float
             Disk radius in pixels.
         """
-        for i_E in range(len(self.energy_reco_bins)-1):
-            counts = disk_correlate(self.counts_cube[i_E, :, :], radius)
-            bkg = disk_correlate(self.bkg_cube[i_E, :, :], radius)
-            self.significance_cube.data[i_E, :, :] = significance(counts, bkg)
+        disk = Tophat2DKernel(radius)
+        disk.normalize('peak')
+        list_kernel=[disk.array]*(len(self.energy_reco_bins)-1)
+        counts=self.counts_cube.convolve(list_kernel)
+        bkg=self.bkg_cube.convolve(list_kernel)
+        self.significance_cube.data = significance(counts.data, bkg.data)
 
     def make_excess_cube(self):
         """Compute excess between counts and bkg image."""
@@ -199,7 +201,7 @@ class StackedObsCubeMaker(object):
          "OBS_ID" and "bkg_scale"
     """
 
-    def __init__(self, empty_cube_images, header,empty_exposure_cube=None,
+    def __init__(self, empty_cube_images,empty_exposure_cube=None,
                  offset_band=None,
                  data_store=None, obs_table=None, exclusion_mask=None,
                  ncounts_min=0, save_bkg_scale=True):
@@ -221,7 +223,7 @@ class StackedObsCubeMaker(object):
         self.obs_table = obs_table
         self.offset_band = offset_band
 
-        self.header = header
+        self.header = empty_cube_images.sky_image_ref.to_image_hdu().header
         self.exclusion_mask = exclusion_mask
         if exclusion_mask:
             self.exclusion_mask = exclusion_mask
@@ -252,7 +254,6 @@ class StackedObsCubeMaker(object):
             cube_images = SingleObsCubeMaker(obs=obs,
                                              empty_cube_images=self.empty_cube_images,
                                              empty_exposure_cube=self.empty_exposure_cube,
-                                             header=self.header,
                                              offset_band=self.offset_band,
                                              exclusion_mask=self.exclusion_mask,
                                              save_bkg_scale=self.save_bkg_scale)
@@ -278,10 +279,12 @@ class StackedObsCubeMaker(object):
         radius : float
             Disk radius in pixels.
         """
-        for i_E in range(len(self.energy_reco_bins)-1):
-            counts = disk_correlate(self.counts_cube.data[i_E, :, :], radius)
-            bkg = disk_correlate(self.bkg_cube.data[i_E, :, :], radius)
-            self.significance_cube.data[i_E, :, :] = significance(counts, bkg)
+        disk = Tophat2DKernel(radius)
+        disk.normalize('peak')
+        list_kernel=[disk.array]*(len(self.energy_reco_bins)-1)
+        counts=self.counts_cube.convolve(list_kernel)
+        bkg=self.bkg_cube.convolve(list_kernel)
+        self.significance_cube.data = significance(counts.data, bkg.data)
 
     def make_excess_cube(self):
         """Compute excess between counts and bkg image."""

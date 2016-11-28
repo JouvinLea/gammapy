@@ -225,7 +225,7 @@ class SkyCube(object):
             raise ValueError("Not a valid mode. Choose either 'center' or 'edges'.")
 
         energy_axis = LogEnergyAxis(energy, mode=mode)
-        data = image.data * np.ones(enumbins).reshape((-1, 1, 1)) * u.Unit('')
+        data = Quantity(image.data * np.ones(enumbins).reshape((-1, 1, 1)),image.unit)
         return cls(data=data, wcs=image.wcs, energy_axis=energy_axis)
 
     @classmethod
@@ -316,7 +316,7 @@ class SkyCube(object):
         energy = Quantity(energy, self.energy_axis.energy.unit)
         return (position, energy)
 
-    def to_sherpa_data3d(self, dstype='Data3D'):
+    def to_sherpa_data3d(self, dstype='Data3D', use_true_energy=False, energy_true_axis=None):
         """
         Convert sky cube to sherpa `Data3D` or `Data3DInt` object.
 
@@ -326,7 +326,10 @@ class SkyCube(object):
             Sherpa data type.
         """
         from .sherpa_ import Data3D, Data3DInt
-        energies = self.energies(mode='edges').to("TeV").value
+        if use_true_energy:
+            energies = energy_true_axis.energy.to("TeV").value
+        else:
+            energies = self.energies(mode='edges').to("TeV").value
         elo = energies[:-1]
         ehi = energies[1:]
         n_ebins = len(elo)
@@ -357,6 +360,7 @@ class SkyCube(object):
 
         else:
             raise ValueError('Invalid sherpa data type.')
+
 
     def sky_image(self, energy, interpolation=None):
         """

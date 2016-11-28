@@ -1,6 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 from __future__ import absolute_import, division, print_function, unicode_literals
 import numpy as np
+from gammapy.utils.energy import EnergyBounds
 from sherpa.models import ArithmeticModel, Parameter, modelCacher1d
 from sherpa.data import DataND, BaseData
 from sherpa.utils.err import DataErr, NotImplementedErr
@@ -205,20 +206,30 @@ class CombinedModel3DInt(ArithmeticModel):
     ----------
     use_psf: bool
         if true will convolve the spatial model by the psf
-    exposure: `~numpy.array`
-        3D `~numpy.array` with the dimension (E,x,y)
+    exposure: `~gammapy.Cube`
+        Exposure Cube
     psf: `~numpy.array`
         3D `~numpy.array` with the dimension (E,x,y)
-
+    spatial_model: `~sherpa.models`
+        spatial sherpa model
+    spectral_model: `~sherpa.models`
+        spectral sherpa model
+    edisp: `~numpy.array`
+        2D array in (Ereco,Etrue) for the energy dispersion
     """
 
     def __init__(self, name='cube-model', use_psf=True, exposure=None, psf=None, spatial_model=None,
-                 spectral_model=None):
+                 spectral_model=None, edisp=None):
         self.spatial_model = spatial_model
         self.spectral_model = spectral_model
         self.use_psf = use_psf
         self.exposure = exposure
         self.psf = psf
+        self.edisp = edisp
+        self.shape_exposure=self.exposure.data.shape
+        #edisp aura dim(Ereco,Etrue)
+        self.shape_edisp=self.edisp.shape
+        self.newdata=np.zeros((self.shape_exposure[1],self.shape_exposure[2],self.shape_exposure[0],self.shape_edisp[0]))
 
         # Fix spectral ampl parameter
         spectral_model.ampl = 1
@@ -233,18 +244,28 @@ class CombinedModel3DInt(ArithmeticModel):
         self._spectral_pars = slice(len(spatial_model.pars), len(pars))
         ArithmeticModel.__init__(self, name, pars)
 
-    def calc(self, pars, elo, xlo, ylo, ehi, xhi, yhi):
+    def calc(self, pars, elo, ehi, x, y):
         from scipy import signal
-        shape = self.exposure.shape
-        result_convol = np.zeros(shape)
+        import IPython; IPython.embed()
         if self.use_psf:
-            a = (self.exposure * self.spatial_model.calc(pars[self._spatial_pars], xlo, xhi, ylo, yhi).reshape(shape))
-            for ind_E in range(shape[0]):
-                result_convol[ind_E, :, :] = signal.fftconvolve(a[ind_E, :, :], self.psf[ind_E, :, :] /
+            spatial = np.zeros(self.shape_exposure)
+            a = (self.exposure.data * self.spatial_model.calc(pars[self._spatial_pars], x, y).reshape(self.shape_exposure))
+            for ind_E in range(self.shape_exposure[0]):
+                spatial[ind_E, :, :] = signal.fftconvolve(a[ind_E, :, :], self.psf[ind_E, :, :] /
                                                                 (self.psf[ind_E, :, :].sum()), mode='same')
-
-            _spatial = result_convol.ravel()
         else:
-            _spatial = self.spatial_model.calc(pars[self._spatial_pars], x, y)
-        _spectral = self.spectral_model.calc(pars[self._spectral_pars], elo, ehi)
-        return _spatial * _spectral
+            _spatial =self.spatial_model.calc(pars[self._spatial_pars], x, y)
+            spatial=_spatial.reshape(self.shape_exposure)
+        etrue_center=EnergyBounds.from_lower_and_upper_bounds(elo,ehi).log_centers
+        #_spectral = self.spectral_model.calc(pars[self._spectral_pars], elo, ehi)
+        _spectral = self.spectral_model.calc(pars[self._spectral_pars], etrue_center)
+        spectral= _spectral.reshape(self.shape_exposure)
+
+        dim_ereco=self.shape_edisp[0]
+        etrue_band=EnergyBounds(self.exposure.energy_axis.energies(mode="edges")).bands
+        for ireco in range(dim_ereco):
+            #move axis permet de trnasformer la dim (etrue,x,y) de spatial and spectral and (x,y,Etrue)
+            self.newdata[:,:,:,ireco]=np.moveaxis(spatial, 0, -1)*np.moveaxis(spectral, 0, -1)*self.edisp[ireco,:]*etrue_band
+        #On somme sur etrue qui est en dim=2 pour l instant
+        final_result=np.sum(self.newdata,axis=2)
+        return final_result
