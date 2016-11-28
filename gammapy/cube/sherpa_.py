@@ -205,6 +205,59 @@ class CombinedModel3DInt(ArithmeticModel):
     ----------
     use_psf: bool
         if true will convolve the spatial model by the psf
+    exposure: `~numpy.array`
+        3D `~numpy.array` with the dimension (E,x,y)
+    psf: `~numpy.array`
+        3D `~numpy.array` with the dimension (E,x,y)
+
+    """
+
+    def __init__(self, name='cube-model', use_psf=True, exposure=None, psf=None, spatial_model=None,
+                 spectral_model=None):
+        self.spatial_model = spatial_model
+        self.spectral_model = spectral_model
+        self.use_psf = use_psf
+        self.exposure = exposure
+        self.psf = psf
+
+        # Fix spectral ampl parameter
+        spectral_model.ampl = 1
+        spectral_model.ampl.freeze()
+
+        pars = []
+        for _ in spatial_model.pars + spectral_model.pars:
+            setattr(self, _.name, _)
+            pars.append(_)
+
+        self._spatial_pars = slice(0, len(spatial_model.pars))
+        self._spectral_pars = slice(len(spatial_model.pars), len(pars))
+        ArithmeticModel.__init__(self, name, pars)
+
+    def calc(self, pars, elo, xlo, ylo, ehi, xhi, yhi):
+        from scipy import signal
+        shape = self.exposure.shape
+        result_convol = np.zeros(shape)
+        if self.use_psf:
+            a = (self.exposure * self.spatial_model.calc(pars[self._spatial_pars], xlo, xhi, ylo, yhi).reshape(shape))
+            for ind_E in range(shape[0]):
+                result_convol[ind_E, :, :] = signal.fftconvolve(a[ind_E, :, :], self.psf[ind_E, :, :] /
+                                                                (self.psf[ind_E, :, :].sum()), mode='same')
+
+            _spatial = result_convol.ravel()
+        else:
+            _spatial = self.spatial_model.calc(pars[self._spatial_pars], xlo, xhi, ylo, yhi)
+        _spectral = self.spectral_model.calc(pars[self._spectral_pars], elo, ehi)
+        return _spatial * _spectral
+
+
+class CombinedModel3DIntConvolveEdisp(ArithmeticModel):
+    """
+    Combined spatial and spectral 3D model.
+
+    Parameters
+    ----------
+    use_psf: bool
+        if true will convolve the spatial model by the psf
     exposure: `~gammapy.cube.SkyCube`
         Exposure Cube
     psf: `~gammapy.cube.SkyCube`
@@ -218,18 +271,18 @@ class CombinedModel3DInt(ArithmeticModel):
     """
 
     def __init__(self, name='cube-model', use_psf=True, exposure=None, psf=None, spatial_model=None,
-                 spectral_model=None, use_edisp=False,edisp=None):
+                 spectral_model=None, edisp=None):
         self.spatial_model = spatial_model
         self.spectral_model = spectral_model
         self.use_psf = use_psf
         self.exposure = exposure
         self.psf = psf
-        self.use_edisp= use_edisp
-        if use_edisp:
-            self.edisp = edisp
-            self.shape_exposure=self.exposure.data.shape
-            self.shape_edisp=self.edisp.shape
-            self.newdata=np.zeros((self.shape_exposure[1],self.shape_exposure[2],self.shape_exposure[0],self.shape_edisp[1]))
+        self.edisp = edisp
+        self.true_energy=EnergyBounds(self.exposure.energies("edges"))
+        self.shape_exposure=self.exposure.data.shape
+        self.shape_edisp=self.edisp.shape
+        self.shape_data=(self.shape_edisp[1],self.shape_exposure[1],self.shape_exposure[2])
+        self.convolve_edisp=np.zeros((self.shape_exposure[1],self.shape_exposure[2],self.shape_exposure[0],self.shape_edisp[1]))
 
 
         # Fix spectral ampl parameter
@@ -248,44 +301,35 @@ class CombinedModel3DInt(ArithmeticModel):
     def calc(self, pars, elo, xlo, ylo, ehi, xhi, yhi):
         from scipy import signal
         shape = self.exposure.data.shape
-        result_convol = np.zeros(shape)
+        spatial = np.zeros(shape)
+        xx_lo=xlo.reshape(self.shape_data)[0,:,:]
+        xx_hi=xhi.reshape(self.shape_data)[0,:,:]
+        yy_lo=ylo.reshape(self.shape_data)[0,:,:]
+        yy_hi=yhi.reshape(self.shape_data)[0,:,:]
+        etrue_centers=self.true_energy.log_centers
         if self.use_psf:
-            a = (self.exposure * self.spatial_model.calc(pars[self._spatial_pars], xlo, xhi, ylo, yhi).reshape(shape))
+            a = self.spatial_model.calc(pars[self._spatial_pars], xx_lo.ravel(), xx_hi.ravel(),
+                                        yy_lo.ravel(), yy_hi.ravel()).reshape(xx_lo.shape)
             for ind_E in range(shape[0]):
-                result_convol[ind_E, :, :] = signal.fftconvolve(a[ind_E, :, :], self.psf[ind_E, :, :] /
-                                                                (self.psf[ind_E, :, :].sum()), mode='same')
-            if
-            _spatial = result_convol.ravel()
-        else:
-            _spatial = self.spatial_model.calc(pars[self._spatial_pars], x, y)
-        _spectral = self.spectral_model.calc(pars[self._spectral_pars], elo, ehi)
-        return _spatial * _spectral
-
-
-
-    def calc(self, pars, elo, ehi, x, y):
-        from scipy import signal
-        import IPython; IPython.embed()
-        if self.use_psf:
-            spatial = np.zeros(self.shape_exposure)
-            a = (self.exposure.data * self.spatial_model.calc(pars[self._spatial_pars], x, y).reshape(self.shape_exposure))
-            for ind_E in range(self.shape_exposure[0]):
-                spatial[ind_E, :, :] = signal.fftconvolve(a[ind_E, :, :], self.psf.data[ind_E, :, :] /
+                spatial[ind_E, :, :] = signal.fftconvolve(a*self.exposure.data[ind_E,:,:], self.psf.data[ind_E, :, :] /
                                                                 (self.psf.data[ind_E, :, :].sum()), mode='same')
+
         else:
-            _spatial =self.spatial_model.calc(pars[self._spatial_pars], x, y)
-            spatial=_spatial.reshape(self.shape_exposure)
+            spatial_2D = self.spatial_model.calc(pars[self._spatial_pars], xlo, xhi, ylo, yhi)
+            spatial=np.tile(spatial_2D, (len(etrue_centers), 1, 1))
+        spectral_1D = self.spectral_model.calc(pars[self._spectral_pars], etrue_centers)
+        spectral=spectral_1D.reshape(len(etrue_centers), 1, 1) * np.ones_like(xx_lo)
 
-        etrue_center=EnergyBounds.from_lower_and_upper_bounds(elo,ehi).log_centers
-        #_spectral = self.spectral_model.calc(pars[self._spectral_pars], elo, ehi)
-        _spectral = self.spectral_model.calc(pars[self._spectral_pars], etrue_center)
-        spectral= _spectral.reshape(self.shape_exposure)
-
-        dim_ereco=self.shape_edisp[1]
-        etrue_band=EnergyBounds(self.exposure.energy_axis.energies(mode="edges")).bands
+        dim_ereco=self.shape_data[0]
+        etrue_band=self.true_energy.bands
         for ireco in range(dim_ereco):
             #move axis permet de trnasformer la dim (etrue,x,y) de spatial and spectral and (x,y,Etrue)
-            self.newdata[:,:,:,ireco]=np.moveaxis(spatial, 0, -1)*np.moveaxis(spectral, 0, -1)*self.edisp[:,ireco]*etrue_band
+
+            self.convolve_edisp[:,:,:,ireco]=np.moveaxis(spatial, 0, -1)*np.moveaxis(spectral, 0, -1)*\
+                                      self.edisp[:,ireco]*etrue_band
         #On somme sur etrue qui est en dim=2 pour l instant
-        final_result=np.sum(self.newdata,axis=2)
-        return final_result.ravel()
+        model=np.sum(self.convolve_edisp,axis=2)
+        return model.ravel()
+
+
+
