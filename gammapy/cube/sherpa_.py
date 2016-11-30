@@ -289,7 +289,7 @@ class CombinedModel3DInt2(ArithmeticModel):
 
     def calc(self, pars, elo, xlo, ylo, ehi, xhi, yhi):
         from scipy import signal
-        shape = self.exposure.shape
+        shape = self.exposure.data.shape
         result_convol = np.zeros(shape)
         xx_lo = xlo.reshape(shape)[0, :, :]
         xx_hi = xhi.reshape(shape)[0, :, :]
@@ -301,16 +301,15 @@ class CombinedModel3DInt2(ArithmeticModel):
             a = self.spatial_model.calc(pars[self._spatial_pars], xx_lo.ravel(), xx_hi.ravel(),
                                         yy_lo.ravel(), yy_hi.ravel()).reshape(xx_lo.shape)
             for ind_E in range(shape[0]):
-                result_convol[ind_E, :, :] = signal.fftconvolve(a * self.exposure[ind_E, :, :], self.psf[ind_E, :, :] /
-                                                                (self.psf[ind_E, :, :].sum()), mode='same')
+                result_convol[ind_E, :, :] = signal.fftconvolve(a * self.exposure.data[ind_E, :, :], self.psf.data[ind_E, :, :] /
+                                                                (self.psf.data[ind_E, :, :].sum()), mode='same')
 
             _spatial = result_convol.ravel()
         else:
             _spatial = self.spatial_model.calc(pars[self._spatial_pars], xlo, xhi, ylo, yhi)
         spectral_1D = self.spectral_model.calc(pars[self._spectral_pars], ee_lo, ee_hi)
-        #import IPython; IPython.embed()
         _spectral = (spectral_1D.reshape(len(ee_lo), 1, 1) * np.ones_like(xx_lo)).ravel()
-
+        #import IPython; IPython.embed()
         return _spatial * _spectral
 
 
@@ -392,6 +391,6 @@ class CombinedModel3DIntConvolveEdisp(ArithmeticModel):
             self.convolve_edisp[:, :, :, ireco] = np.moveaxis(spatial, 0, -1) * np.moveaxis(spectral, 0, -1) * \
                                                   self.edisp[:, ireco] * etrue_band
         # On somme sur etrue qui est en dim=2 pour l instant
-        model = np.sum(self.convolve_edisp, axis=2)
+        model = np.moveaxis(np.sum(self.convolve_edisp, axis=2),-1,0)
         #import IPython; IPython.embed()
         return model.ravel()

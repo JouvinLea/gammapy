@@ -39,7 +39,6 @@ def exposure_cube(pointing,
     """
     coordinates = ref_cube.sky_image_ref.coordinates()
     offset = coordinates.separation(pointing)
-
     energy = ref_cube.energies()
     exposure = aeff2d.evaluate(offset=offset, energy=energy)
     exposure *= livetime
