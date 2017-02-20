@@ -55,7 +55,7 @@ class DataStore(object):
     >>> data_store.info()
 
     """
-    DEFAULT_HDU_TABLE = 'hdu-index.fits.gz'
+    DEFAULT_HDU_TABL = 'hdu-index.fits.gz'
     """Default HDU table filename."""
 
     DEFAULT_OBS_TABLE = 'obs-index.fits.gz'
