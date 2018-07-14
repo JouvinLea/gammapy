@@ -203,13 +203,21 @@ def make_map_hadron_acceptance(pointing, livetime, bkg, ref_geom, offset_max):
     # Compute offset at all the pixels and energy of the Map
     fov_lon = map_coord.skycoord.separation(pointing)
     fov_lat = Angle(np.zeros_like(fov_lon), fov_lon.unit)
-    data = bkg.evaluate(fov_lon=fov_lon, fov_lat=fov_lat, energy_reco=energy_reco)
-
-    # TODO: add proper integral over energy
-    energy_axis = ref_geom.axes[0]
-    d_energy = np.diff(energy_axis.edges) * energy_axis.unit
+    data = np.zeros_like(fov_lat.value)
+    for ie, (e_lo, e_hi) in enumerate(zip(energy_axis.edges[0:-1], energy_axis.edges[1:])):
+        data[ie, :, :] = bkg.integrate_on_energy_range(
+            fov_lon=fov_lon[0, :, :],
+            fov_lat=fov_lat[0, :, :],
+            energy_range=[e_lo * energy_axis.unit, e_hi * energy_axis.unit])
+    bkg.integrate_on_energy_range(fov_lon=fov_lon[0, :, :], fov_lat=fov_lat[0, :, :],
+                                  energy_range=[e_lo * energy_axis.unit, e_hi * energy_axis.unit])
     d_omega = ref_geom.solid_angle()
-    data = (data * d_energy[:, np.newaxis, np.newaxis] * d_omega * livetime).to('').value
+    assert 2 == 3
+    data = (data * d_omega * livetime).to('').value
+    # data = bkg.evaluate(fov_lon=fov_lon, fov_lat=fov_lat, energy_reco=energy_reco)
+    # d_energy = np.diff(energy_axis.edges) * energy_axis.unit
+    # data = (data * d_energy[:, np.newaxis, np.newaxis] * d_omega * livetime).to('').value
+
 
     # Put exposure outside offset max to zero
     # This might be more generaly dealt with a mask map
