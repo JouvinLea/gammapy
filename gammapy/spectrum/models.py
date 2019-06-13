@@ -26,6 +26,7 @@ __all__ = [
     'TableModel',
     'AbsorbedSpectralModel',
     'Absorption',
+    'Gaussian'
 ]
 
 
@@ -1539,3 +1540,56 @@ class AbsorbedSpectralModel(SpectralModel):
         absorption = self.absorption.evaluate(energy=energy,
                                               parameter=parameter)
         return flux * absorption
+
+class Gaussian(SpectralModel):
+    r"""Gaussian spectral model.
+
+    .. math::
+
+        \phi(E) = \frac{\N_0}{\sigma \sqrt(2*\pi)}  \exp{ \frac{\left( E-\bar{E} \right)^2 }{2 \simga^2} }
+
+    This is consistent
+    with the `Fermi Science Tools
+    <https://fermi.gsfc.nasa.gov/ssc/data/analysis/scitools/source_models.html#Gaussian>`_
+    and `ctools
+    <http://cta.irap.omp.eu/ctools/users/user_manual/getting_started/models.html#gaussian>`_.
+
+
+    Parameters
+    ----------
+    norm : `~astropy.units.Quantity`
+        :math:`\N_0`
+    mean : `~astropy.units.Quantity`
+        :math:`\bar{E}`
+    sigma : `~astropy.units.Quantity`
+        :math:`\sigma`
+
+
+    Examples
+    --------
+    This is how to plot the default `Gaussian` spectral model:
+
+    .. code:: python
+
+        from astropy import units as u
+        from gammapy.spectrum.models import Gaussian
+
+        gaussian = Gaussian()
+        gaussian.plot(energy_range=[0.1, 100] * u.TeV)
+        plt.show()
+    """
+
+    def __init__(self, norm=1E-12 * u.Unit('cm-2 s-1'), mean=1 * u.TeV,
+                 sigma=2* u.TeV):
+        self.parameters = ParameterList([
+            Parameter('norm', norm),
+            Parameter('mean', mean, frozen=True),
+            Parameter('sigma', sigma),
+        ])
+
+
+
+    @staticmethod
+    def evaluate(energy, norm, mean, sigma):
+
+        return norm/ (sigma *np.sqrt(2*np.pi)) * np.exp( (energy-mean)**2 / (2 * sigma**2))
