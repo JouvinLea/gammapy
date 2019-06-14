@@ -1541,6 +1541,7 @@ class AbsorbedSpectralModel(SpectralModel):
                                               parameter=parameter)
         return flux * absorption
 
+
 class Gaussian(SpectralModel):
     r"""Gaussian spectral model.
 
@@ -1593,3 +1594,28 @@ class Gaussian(SpectralModel):
     def evaluate(energy, norm, mean, sigma):
 
         return norm/ (sigma *np.sqrt(2*np.pi)) * np.exp( (energy-mean)**2 / (2 * sigma**2))
+
+    def integral(self, emin, emax, **kwargs):
+        r"""Integrate power law analytically.
+
+        .. math::
+
+            F(E_{min}, E_{max}) = \int_{E_{min}}^{E_{max}}\phi(E)dE = \left.
+            \phi_0 \frac{E_0}{-\Gamma + 1} \left( \frac{E}{E_0} \right)^{-\Gamma + 1}
+            \right \vert _{E_{min}}^{E_{max}}
+
+        Parameters
+        ----------
+        emin, emax : `~astropy.units.Quantity`
+            Lower and upper bound of integration range
+        """
+        from scipy.special import erf
+        # kwargs are passed to this function but not used
+        # this is to get a consistent API with SpectralModel.integral()
+        pars = self.parameters
+        u_min = (emin - pars['mean'].quantity )/ ( np.sqrt(2) * pars['sigma'].quantity )
+        u_max = (emax - pars['mean'].quantity) / (np.sqrt(2) * pars['sigma'].quantity )
+
+        int = pars['norm'].quantity / (2 ) *(erf(u_max) - erf(u_min))
+        return int
+

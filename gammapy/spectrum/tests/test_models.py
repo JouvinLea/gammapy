@@ -8,7 +8,7 @@ from ...utils.testing import requires_dependency, requires_data
 from ...scripts import CTAPerf
 from ..models import (PowerLaw, PowerLaw2, ExponentialCutoffPowerLaw,
                       ExponentialCutoffPowerLaw3FGL, LogParabola,
-                      TableModel, AbsorbedSpectralModel, Absorption)
+                      TableModel, AbsorbedSpectralModel, Absorption, Gaussian)
 from ...spectrum import SpectrumObservationList, SpectrumFit
 
 
@@ -120,6 +120,19 @@ TEST_MODELS = [
         eflux_1_10TeV=u.Quantity(3.9586515834989267, 'TeV cm-2 s-1'),
         e_peak=0.74082 * u.TeV
     ),
+    dict(
+        name='Gaussian',
+        model=Gaussian(
+            norm=2 / u.cm ** 2 / u.s,
+            mean=1 * u.TeV,
+            sigma=2 * u.TeV
+        ),
+
+        val_at_2TeV=u.Quantity(0.45206082789983554, 'cm-2 s-1 TeV-1'),
+        integral_1_10TeV=u.Quantity(0.9999932046537505, 'cm-2 s-1'),
+        integral_infinity=u.Quantity(2, 'cm-2 s-1'),
+        eflux_1_10TeV=u.Quantity(3.9586515834989267, 'TeV cm-2 s-1'),
+    ),
 ]
 
 # Add compound models
@@ -195,6 +208,12 @@ def test_models(spectrum):
 
     if 'e_peak' in spectrum:
         assert_quantity_allclose(model.e_peak, spectrum['e_peak'], rtol=1E-2)
+
+    if 'integral_infinity' in spectrum:
+        emin = -10000 * u.TeV
+        emax = 10000 * u.TeV
+        assert_quantity_allclose(model.integral(emin=emin, emax=emax),
+                                 spectrum['integral_infinity'])
 
     # inverse for TableModel is not implemented
     if not isinstance(model, TableModel):
